@@ -87,6 +87,8 @@ nav button{width:15%;padding:10px;margin:0;border-radius:8px;font-size:16px}
     <div class="card">
       <h3>💬 Group Chat</h3>
       <select id="groupSelect"></select>
+      <input id="newGroupInput" placeholder="New group name">
+      <button onclick="createGroup()">Create Group</button>
       <div id="messages"></div>
       <input id="chatInput" placeholder="Type message">
       <button onclick="sendMessage()">Send</button>
@@ -109,6 +111,13 @@ nav button{width:15%;padding:10px;margin:0;border-radius:8px;font-size:16px}
         <textarea id="reportReason" placeholder="Reason for report"></textarea>
         <button onclick="reportUser()">Report</button>
         <div id="reportStatus"></div>
+      </div>
+
+      <div style="margin-top:10px;">
+        <h4>Find Users</h4>
+        <input id="searchEmail" placeholder="Search by email">
+        <button onclick="searchUser()">Search</button>
+        <div id="searchStatus"></div>
       </div>
     </div>
   </section>
@@ -160,6 +169,13 @@ nav button{width:15%;padding:10px;margin:0;border-radius:8px;font-size:16px}
       <div id="reportsLog"></div>
     </div>
 
+    <div class="card">
+      <h3>💾 Backup & Restore</h3>
+      <button onclick="downloadBackup()">Download Backup</button>
+      <textarea id="restoreInput" placeholder="Paste backup JSON to restore"></textarea>
+      <button onclick="restoreBackup()">Restore Backup</button>
+    </div>
+
   </section>
 
 </section>
@@ -195,6 +211,7 @@ const storiesContainer=document.getElementById("storiesContainer")
 const storyInput=document.getElementById("storyInput")
 const liveVideo=document.getElementById("liveVideo")
 const groupSelect=document.getElementById("groupSelect")
+const newGroupInput=document.getElementById("newGroupInput")
 const chatInput=document.getElementById("chatInput")
 const messages=document.getElementById("messages")
 const notifications=document.getElementById("notifications")
@@ -208,6 +225,10 @@ const reportEmail=document.getElementById("reportEmail")
 const reportReason=document.getElementById("reportReason")
 const reportStatus=document.getElementById("reportStatus")
 const reportsLog=document.getElementById("reportsLog")
+const searchEmail=document.getElementById("searchEmail")
+const searchStatus=document.getElementById("searchStatus")
+const restoreInput=document.getElementById("restoreInput")
+groupSelect.addEventListener("change",renderMessages)
 
 // ===== AUTH SYSTEM =====
 function authAction(){
@@ -310,6 +331,17 @@ function loadGroups(){
   Object.keys(groups).forEach(g=>{ let o=document.createElement("option"); o.textContent=g; groupSelect.appendChild(o) })
   renderMessages()
 }
+function createGroup(){
+  const groupName=newGroupInput.value.trim()
+  if(!groupName) return alert("Enter a group name")
+  if(groups[groupName]) return alert("Group already exists")
+  groups[groupName]=[]
+  localStorage.setItem("groups",JSON.stringify(groups))
+  newGroupInput.value=""
+  loadGroups()
+  groupSelect.value=groupName
+  notify(`Created group: ${groupName}`)
+}
 function sendMessage(){
   if(privacy[currentUser.email]?.hideChat||privacy[currentUser.email]?.private) return alert("Chat disabled or private account")
   let g=groupSelect.value
@@ -368,6 +400,63 @@ function reportUser(){
   renderReports()
 }
 function renderReports(){ reportsLog.innerHTML=""; reports.forEach(r=>{ reportsLog.innerHTML+=`<div class="alert">Reported by: ${r.reportedBy}<br>Email: ${r.email}<br>Reason: ${r.reason}<br>Time: ${r.time}</div>` }) }
+
+// ===== SEARCH USERS =====
+function searchUser(){
+  const email=searchEmail.value.trim()
+  if(!email){
+    searchStatus.textContent="Enter an email to search"
+    return
+  }
+  if(users[email]){
+    const name=users[email].name||"Unknown"
+    const accountPrivacy=privacy[email]?.private ? "Private" : "Public"
+    searchStatus.innerHTML=`Found: <b>${name}</b> (${email}) - ${accountPrivacy} account`
+  }else{
+    searchStatus.textContent="User not found"
+  }
+}
+
+// ===== BACKUP / RESTORE =====
+function downloadBackup(){
+  const backup={users,groups,security,risk,ipTracker,stories,privacy,reports,user:currentUser}
+  const blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json"})
+  const link=document.createElement("a")
+  link.href=URL.createObjectURL(blob)
+  link.download="sinigang-social-backup.json"
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
+function restoreBackup(){
+  try{
+    const data=JSON.parse(restoreInput.value)
+    users=data.users||{}
+    groups=data.groups||{"General":[]}
+    security=data.security||[]
+    risk=data.risk||{}
+    ipTracker=data.ipTracker||{}
+    stories=data.stories||{}
+    privacy=data.privacy||{}
+    reports=data.reports||[]
+    currentUser=data.user||currentUser
+
+    localStorage.setItem("users",JSON.stringify(users))
+    localStorage.setItem("groups",JSON.stringify(groups))
+    localStorage.setItem("security",JSON.stringify(security))
+    localStorage.setItem("risk",JSON.stringify(risk))
+    localStorage.setItem("ipTracker",JSON.stringify(ipTracker))
+    localStorage.setItem("stories",JSON.stringify(stories))
+    localStorage.setItem("privacy",JSON.stringify(privacy))
+    localStorage.setItem("reports",JSON.stringify(reports))
+    if(currentUser) localStorage.setItem("user",JSON.stringify(currentUser))
+
+    restoreInput.value=""
+    alert("Backup restored successfully")
+    if(currentUser) showApp()
+  }catch(e){
+    alert("Invalid backup JSON")
+  }
+}
 
 // ===== INITIALIZE =====
 if(currentUser) showApp()
