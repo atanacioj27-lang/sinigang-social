@@ -19,6 +19,11 @@ button:hover{opacity:.9}
 #liveVideo{width:100%;height:300px;background:#000}
 .hidden{display:none}
 nav button{width:15%;padding:10px;margin:0;border-radius:8px;font-size:16px}
+.utility-row{display:flex;gap:8px;flex-wrap:wrap}
+.utility-row button{width:auto;padding:8px 12px}
+body.dark{background:#1f1f1f;color:#f5f5f5}
+body.dark .card{background:#2b2b2b;color:#f5f5f5}
+body.dark input,body.dark select,body.dark textarea{background:#1b1b1b;color:#f5f5f5;border-color:#555}
 </style>
 </head>
 <body>
@@ -87,6 +92,8 @@ nav button{width:15%;padding:10px;margin:0;border-radius:8px;font-size:16px}
     <div class="card">
       <h3>💬 Group Chat</h3>
       <select id="groupSelect"></select>
+      <input id="newGroupInput" placeholder="New group name">
+      <button onclick="createGroup()">Create Group</button>
       <div id="messages"></div>
       <input id="chatInput" placeholder="Type message">
       <button onclick="sendMessage()">Send</button>
@@ -109,6 +116,13 @@ nav button{width:15%;padding:10px;margin:0;border-radius:8px;font-size:16px}
         <textarea id="reportReason" placeholder="Reason for report"></textarea>
         <button onclick="reportUser()">Report</button>
         <div id="reportStatus"></div>
+      </div>
+
+      <div style="margin-top:10px;">
+        <h4>Find Users</h4>
+        <input id="searchEmail" placeholder="Search by email">
+        <button onclick="searchUser()">Search</button>
+        <div id="searchStatus"></div>
       </div>
     </div>
   </section>
@@ -160,6 +174,21 @@ nav button{width:15%;padding:10px;margin:0;border-radius:8px;font-size:16px}
       <div id="reportsLog"></div>
     </div>
 
+    <div class="card">
+      <h3>🛠 App Controls</h3>
+      <div class="utility-row">
+        <button onclick="toggleTheme()">Toggle Theme</button>
+        <button onclick="resetAllData()" style="background:#B71C1C">Reset All Local Data</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>💾 Backup & Restore</h3>
+      <button onclick="downloadBackup()">Download Backup</button>
+      <textarea id="restoreInput" placeholder="Paste backup JSON to restore"></textarea>
+      <button onclick="restoreBackup()">Restore Backup</button>
+    </div>
+
   </section>
 
 </section>
@@ -177,6 +206,7 @@ let stories = JSON.parse(localStorage.getItem("stories")) || {}
 let privacy = JSON.parse(localStorage.getItem("privacy")) || {}
 let reports = JSON.parse(localStorage.getItem("reports")) || []
 let liveStream = null
+let appPrefs = JSON.parse(localStorage.getItem("appPrefs")) || {theme:"light"}
 
 // ===== DOM ELEMENTS =====
 const fullNameInput=document.getElementById("fullName")
@@ -195,6 +225,7 @@ const storiesContainer=document.getElementById("storiesContainer")
 const storyInput=document.getElementById("storyInput")
 const liveVideo=document.getElementById("liveVideo")
 const groupSelect=document.getElementById("groupSelect")
+const newGroupInput=document.getElementById("newGroupInput")
 const chatInput=document.getElementById("chatInput")
 const messages=document.getElementById("messages")
 const notifications=document.getElementById("notifications")
@@ -208,6 +239,34 @@ const reportEmail=document.getElementById("reportEmail")
 const reportReason=document.getElementById("reportReason")
 const reportStatus=document.getElementById("reportStatus")
 const reportsLog=document.getElementById("reportsLog")
+const searchEmail=document.getElementById("searchEmail")
+const searchStatus=document.getElementById("searchStatus")
+const restoreInput=document.getElementById("restoreInput")
+groupSelect.addEventListener("change",renderMessages)
+
+function loadPrefs(){
+  document.body.classList.toggle("dark", appPrefs.theme==="dark")
+}
+function toggleTheme(){
+  appPrefs.theme=appPrefs.theme==="dark" ? "light" : "dark"
+  localStorage.setItem("appPrefs",JSON.stringify(appPrefs))
+  loadPrefs()
+}
+function resetAllData(){
+  if(!confirm("This will erase all local app data on this browser. Continue?")) return
+  localStorage.clear()
+  location.reload()
+}
+
+function createAlertBlock(lines){
+  const block=document.createElement("div")
+  block.className="alert"
+  lines.forEach((line,index)=>{
+    if(index>0) block.appendChild(document.createElement("br"))
+    block.appendChild(document.createTextNode(line))
+  })
+  return block
+}
 
 // ===== AUTH SYSTEM =====
 function authAction(){
@@ -231,12 +290,15 @@ function authAction(){
     showApp()
   }
 }
-function toggleAuth(){
-  isLogin=!isLogin
+function setAuthMode(loginMode){
+  isLogin=loginMode
   authTitle.textContent=isLogin?"Login":"Sign Up"
   authBtn.textContent=isLogin?"Login":"Sign Up"
   toggleText.innerHTML=isLogin?`Don't have an account? <a href="#" onclick="toggleAuth()">Sign Up</a>`:`Already have an account? <a href="#" onclick="toggleAuth()">Login</a>`
   fullNameInput.style.display=isLogin?"none":"block"
+}
+function toggleAuth(){
+  setAuthMode(!isLogin)
 }
 function showApp(){
   loginSection.classList.add("hidden")
@@ -260,6 +322,7 @@ function logout(){
   localStorage.removeItem("user")
   appSection.classList.add("hidden")
   loginSection.classList.remove("hidden")
+  setAuthMode(true)
 }
 
 // ===== NAVIGATION =====
@@ -278,7 +341,7 @@ async function trackIP(){
   if(!ipTracker[u]) ipTracker[u]=[]
   if(!ipTracker[u].includes(ip)){ ipTracker[u].push(ip); aiDetect("New IP detected") }
   localStorage.setItem("ipTracker",JSON.stringify(ipTracker))
-  ipInfo.innerHTML=`<b>Current IP:</b> ${ip}<br><b>Known IPs:</b> ${ipTracker[u].length}`
+  ipInfo.textContent=`Current IP: ${ip} | Known IPs: ${ipTracker[u].length}`
   if(ipTracker[u].length>=4) aiDetect("Multiple IP hopping")
 }
 
@@ -306,21 +369,49 @@ function stopLive(){ if(liveStream) liveStream.getTracks().forEach(t=>t.stop()) 
 
 // ===== GROUP CHAT =====
 function loadGroups(){
+  if(!groups || Object.keys(groups).length===0) groups={"General":[]}
   groupSelect.innerHTML=""
   Object.keys(groups).forEach(g=>{ let o=document.createElement("option"); o.textContent=g; groupSelect.appendChild(o) })
   renderMessages()
+}
+function createGroup(){
+  const groupName=newGroupInput.value.trim()
+  if(!groupName) return alert("Enter a group name")
+  if(groups[groupName]) return alert("Group already exists")
+  groups[groupName]=[]
+  localStorage.setItem("groups",JSON.stringify(groups))
+  newGroupInput.value=""
+  loadGroups()
+  groupSelect.value=groupName
+  notify(`Created group: ${groupName}`)
 }
 function sendMessage(){
   if(privacy[currentUser.email]?.hideChat||privacy[currentUser.email]?.private) return alert("Chat disabled or private account")
   let g=groupSelect.value
   let text=chatInput.value.trim(); if(!text) return
+  if(!g||!groups[g]) return alert("Please select a valid group")
   groups[g].push({user:currentUser.email,text,time:new Date().toLocaleTimeString()})
   localStorage.setItem("groups",JSON.stringify(groups))
   chatInput.value=""; renderMessages(); notify(`${currentUser.email} sent a message`)
 }
 function renderMessages(){
-  let g=groupSelect.value; messages.innerHTML=""
-  groups[g].forEach(m=>{ messages.innerHTML+=`<div><b>${m.user}</b>: ${m.text} <small>${m.time}</small></div>` })
+  const g=groupSelect.value
+  messages.innerHTML=""
+  if(!g||!groups[g]) return
+
+  groups[g].forEach(m=>{
+    const row=document.createElement("div")
+    const author=document.createElement("b")
+    author.textContent=m.user
+    const textNode=document.createTextNode(`: ${m.text} `)
+    const time=document.createElement("small")
+    time.textContent=m.time
+    row.appendChild(author)
+    row.appendChild(textNode)
+    row.appendChild(time)
+    messages.appendChild(row)
+  })
+
   messages.scrollTop=messages.scrollHeight
 }
 function notify(text){ let d=document.createElement("div"); d.className="badge"; d.textContent="🔔 "+text; notifications.prepend(d); setTimeout(()=>d.remove(),4000) }
@@ -334,29 +425,94 @@ function saveAccountPrivacy(){ privacy[currentUser.email]={private:accPrivate.ch
 function changeEmail(){
   let newEmail=changeEmailInput.value.trim(); if(!newEmail) return alert("Enter a valid email")
   if(users[newEmail]) return alert("Email already exists")
-  users[newEmail]=users[currentUser.email]?users[currentUser.email]:{password:currentUser.password,name:currentUser.name}
-  delete users[currentUser.email]
-  localStorage.setItem("users",JSON.stringify(users))
-  if(privacy[currentUser.email]) privacy[newEmail]=privacy[currentUser.email]
-  if(stories[currentUser.email]) stories[newEmail]=stories[currentUser.email]
-  if(ipTracker[currentUser.email]) ipTracker[newEmail]=ipTracker[currentUser.email]
-  if(risk[currentUser.email]) risk[newEmail]=risk[currentUser.email]
-  delete privacy[currentUser.email]; delete stories[currentUser.email]; delete ipTracker[currentUser.email]; delete risk[currentUser.email]
+
+  const oldEmail=currentUser.email
+  users[newEmail]=users[oldEmail]?users[oldEmail]:{password:currentUser.password,name:currentUser.name}
+  delete users[oldEmail]
+
+  if(privacy[oldEmail]) privacy[newEmail]=privacy[oldEmail]
+  if(stories[oldEmail]) stories[newEmail]=stories[oldEmail]
+  if(ipTracker[oldEmail]) ipTracker[newEmail]=ipTracker[oldEmail]
+  if(risk[oldEmail]) risk[newEmail]=risk[oldEmail]
+
+  Object.keys(groups).forEach(groupName=>{
+    groups[groupName]=groups[groupName].map(message=>message.user===oldEmail?{...message,user:newEmail}:message)
+  })
+  security=security.map(log=>log.user===oldEmail?{...log,user:newEmail}:log)
+  reports=reports.map(report=>report.reportedBy===oldEmail?{...report,reportedBy:newEmail}:report)
+
+  delete privacy[oldEmail]; delete stories[oldEmail]; delete ipTracker[oldEmail]; delete risk[oldEmail]
   currentUser.email=newEmail
+
+  localStorage.setItem("users",JSON.stringify(users))
+  localStorage.setItem("groups",JSON.stringify(groups))
+  localStorage.setItem("security",JSON.stringify(security))
+  localStorage.setItem("reports",JSON.stringify(reports))
   localStorage.setItem("user",JSON.stringify(currentUser))
   localStorage.setItem("privacy",JSON.stringify(privacy))
   localStorage.setItem("stories",JSON.stringify(stories))
   localStorage.setItem("ipTracker",JSON.stringify(ipTracker))
   localStorage.setItem("risk",JSON.stringify(risk))
-  updateUserUI(); loadAccountUI(); alert("Email updated successfully!"); changeEmailInput.value=""
+
+  updateUserUI(); loadAccountUI(); renderMessages(); renderSecurity(); renderReports()
+  alert("Email updated successfully!")
+  changeEmailInput.value=""
 }
-function changePassword(){ let newPassword=changePasswordInput.value.trim(); if(!newPassword) return alert("Enter a valid password"); currentUser.password=newPassword; localStorage.setItem("user",JSON.stringify(currentUser)); alert("Password updated!"); changePasswordInput.value="" }
-function deleteAccount(){ if(!confirm("Are you sure?")) return; delete privacy[currentUser.email]; delete stories[currentUser.email]; delete ipTracker[currentUser.email]; delete risk[currentUser.email]; delete users[currentUser.email]; localStorage.removeItem("user"); localStorage.setItem("users",JSON.stringify(users)); currentUser=null; alert("Account deleted!"); location.reload() }
+function changePassword(){
+  let newPassword=changePasswordInput.value.trim()
+  if(!newPassword) return alert("Enter a valid password")
+  currentUser.password=newPassword
+  if(users[currentUser.email]) users[currentUser.email].password=newPassword
+  localStorage.setItem("user",JSON.stringify(currentUser))
+  localStorage.setItem("users",JSON.stringify(users))
+  alert("Password updated!")
+  changePasswordInput.value=""
+}
+function deleteAccount(){
+  if(!confirm("Are you sure?")) return
+  const userEmail=currentUser.email
+
+  delete privacy[userEmail]
+  delete stories[userEmail]
+  delete ipTracker[userEmail]
+  delete risk[userEmail]
+  delete users[userEmail]
+
+  Object.keys(groups).forEach(groupName=>{
+    groups[groupName]=groups[groupName].filter(message=>message.user!==userEmail)
+  })
+  security=security.filter(log=>log.user!==userEmail)
+  reports=reports.filter(report=>report.reportedBy!==userEmail)
+
+  localStorage.removeItem("user")
+  localStorage.setItem("users",JSON.stringify(users))
+  localStorage.setItem("groups",JSON.stringify(groups))
+  localStorage.setItem("security",JSON.stringify(security))
+  localStorage.setItem("reports",JSON.stringify(reports))
+  localStorage.setItem("privacy",JSON.stringify(privacy))
+  localStorage.setItem("stories",JSON.stringify(stories))
+  localStorage.setItem("ipTracker",JSON.stringify(ipTracker))
+  localStorage.setItem("risk",JSON.stringify(risk))
+
+  currentUser=null
+  alert("Account deleted!")
+  location.reload()
+}
 function updateUserUI(){ document.getElementById('userName').textContent=currentUser.name; document.getElementById('profileName').textContent=currentUser.name; document.getElementById('profileEmail').textContent=currentUser.email }
 
 // ===== AI SECURITY =====
 function aiDetect(reason){ let u=currentUser.email; if(!risk[u]) risk[u]=0; let score={"New IP detected":2,"Multiple IP hopping":3}[reason]||1; risk[u]+=score; security.unshift({user:u,reason,risk:risk[u],time:new Date().toLocaleString()}); localStorage.setItem("security",JSON.stringify(security)); localStorage.setItem("risk",JSON.stringify(risk)); renderSecurity() }
-function renderSecurity(){ securityLog.innerHTML=""; security.forEach(s=>{ securityLog.innerHTML+=`<div class="alert">⚠ ${s.reason}<br>User: ${s.user}<br>Risk: ${s.risk}<br>Time: ${s.time}</div>` }) }
+function renderSecurity(){
+  securityLog.innerHTML=""
+  security.forEach(s=>{
+    securityLog.appendChild(createAlertBlock([
+      `⚠ ${s.reason}`,
+      `User: ${s.user}`,
+      `Risk: ${s.risk}`,
+      `Time: ${s.time}`
+    ]))
+  })
+}
 
 // ===== REPORT USER =====
 function reportUser(){
@@ -367,11 +523,89 @@ function reportUser(){
   reportEmail.value=""; reportReason.value=""
   renderReports()
 }
-function renderReports(){ reportsLog.innerHTML=""; reports.forEach(r=>{ reportsLog.innerHTML+=`<div class="alert">Reported by: ${r.reportedBy}<br>Email: ${r.email}<br>Reason: ${r.reason}<br>Time: ${r.time}</div>` }) }
+function renderReports(){
+  reportsLog.innerHTML=""
+  reports.forEach(r=>{
+    reportsLog.appendChild(createAlertBlock([
+      `Reported by: ${r.reportedBy}`,
+      `Email: ${r.email}`,
+      `Reason: ${r.reason}`,
+      `Time: ${r.time}`
+    ]))
+  })
+}
+
+// ===== SEARCH USERS =====
+function searchUser(){
+  const email=searchEmail.value.trim()
+  if(!email){
+    searchStatus.textContent="Enter an email to search"
+    return
+  }
+  if(users[email]){
+    const name=users[email].name||"Unknown"
+    const accountPrivacy=privacy[email]?.private ? "Private" : "Public"
+    searchStatus.textContent=`Found: ${name} (${email}) - ${accountPrivacy} account`
+  }else{
+    searchStatus.textContent="User not found"
+  }
+}
+
+// ===== BACKUP / RESTORE =====
+function downloadBackup(){
+  const backup={users,groups,security,risk,ipTracker,stories,privacy,reports,user:currentUser}
+  const blob=new Blob([JSON.stringify(backup,null,2)],{type:"application/json"})
+  const link=document.createElement("a")
+  link.href=URL.createObjectURL(blob)
+  link.download="sinigang-social-backup.json"
+  link.click()
+  URL.revokeObjectURL(link.href)
+}
+function restoreBackup(){
+  try{
+    if(!restoreInput.value.trim()) return alert("Paste backup JSON first")
+
+    const data=JSON.parse(restoreInput.value)
+    users=data.users&&typeof data.users==="object" ? data.users : {}
+    groups=data.groups&&typeof data.groups==="object" ? data.groups : {"General":[]}
+    security=Array.isArray(data.security) ? data.security : []
+    risk=data.risk&&typeof data.risk==="object" ? data.risk : {}
+    ipTracker=data.ipTracker&&typeof data.ipTracker==="object" ? data.ipTracker : {}
+    stories=data.stories&&typeof data.stories==="object" ? data.stories : {}
+    privacy=data.privacy&&typeof data.privacy==="object" ? data.privacy : {}
+    reports=Array.isArray(data.reports) ? data.reports : []
+    currentUser=data.user&&typeof data.user==="object" ? data.user : currentUser
+
+    if(Object.keys(groups).length===0) groups={"General":[]}
+
+    localStorage.setItem("users",JSON.stringify(users))
+    localStorage.setItem("groups",JSON.stringify(groups))
+    localStorage.setItem("security",JSON.stringify(security))
+    localStorage.setItem("risk",JSON.stringify(risk))
+    localStorage.setItem("ipTracker",JSON.stringify(ipTracker))
+    localStorage.setItem("stories",JSON.stringify(stories))
+    localStorage.setItem("privacy",JSON.stringify(privacy))
+    localStorage.setItem("reports",JSON.stringify(reports))
+
+    if(currentUser){
+      localStorage.setItem("user",JSON.stringify(currentUser))
+      showApp()
+    }else{
+      localStorage.removeItem("user")
+      location.reload()
+    }
+
+    restoreInput.value=""
+    alert("Backup restored successfully")
+  }catch(e){
+    alert("Invalid backup JSON")
+  }
+}
 
 // ===== INITIALIZE =====
+loadPrefs()
 if(currentUser) showApp()
-toggleAuth() // hide full name input initially
+else setAuthMode(true)
 </script>
 
 </body>
