@@ -28,6 +28,7 @@ nav button{width:15%;padding:10px;margin:0;border-radius:8px;font-size:16px}
 <!-- LOGIN / SIGNUP SECTION -->
 <section id="loginSection">
   <div class="card">
+    <div id="authNotice" class="alert hidden"></div>
     <h3 id="authTitle">Login</h3>
     <input id="fullName" placeholder="Full Name (Sign Up only)">
     <input id="email" placeholder="Email">
@@ -184,6 +185,7 @@ nav button{width:15%;padding:10px;margin:0;border-radius:8px;font-size:16px}
 // ===== GLOBAL STATE =====
 let users = JSON.parse(localStorage.getItem("users")) || {}
 let currentUser = JSON.parse(localStorage.getItem("user")) || null
+let sessionToken = localStorage.getItem("sessionToken") || null
 let isLogin = true
 let groups = JSON.parse(localStorage.getItem("groups")) || {"General":[]}
 let security = JSON.parse(localStorage.getItem("security")) || []
@@ -200,6 +202,7 @@ const emailInput=document.getElementById("email")
 const passwordInput=document.getElementById("password")
 const authTitle=document.getElementById("authTitle")
 const authBtn=document.getElementById("authBtn")
+const authNotice=document.getElementById("authNotice")
 const toggleText=document.getElementById("toggleText")
 const loginSection=document.getElementById("loginSection")
 const appSection=document.getElementById("appSection")
@@ -230,26 +233,99 @@ const searchStatus=document.getElementById("searchStatus")
 const restoreInput=document.getElementById("restoreInput")
 groupSelect.addEventListener("change",renderMessages)
 
+// ===== AUTH API / MIGRATION =====
+const AUTH_ENDPOINTS={
+  signup:"/api/auth/signup",
+  login:"/api/auth/login",
+  session:"/api/auth/me",
+  changeEmail:"/api/auth/change-email",
+  changePassword:"/api/auth/change-password",
+  deleteAccount:"/api/auth/delete-account"
+}
+
+function setAuthNotice(message){
+  if(!message){
+    authNotice.classList.add("hidden")
+    authNotice.textContent=""
+    return
+  }
+  authNotice.textContent=message
+  authNotice.classList.remove("hidden")
+}
+
+function sanitizeUsers(userMap){
+  const sanitized={}
+  Object.entries(userMap||{}).forEach(([email,data])=>{
+    const name=(data&&data.name)?data.name:email.split('@')[0]
+    sanitized[email]={name}
+  })
+  return sanitized
+}
+
+function migrateLegacyAuthStorage(){
+  const storedUsers=JSON.parse(localStorage.getItem("users")||"{}")
+  const storedUser=JSON.parse(localStorage.getItem("user")||"null")
+  const hasLegacyUsers=Object.values(storedUsers).some(u=>u&&typeof u==="object"&&"password" in u)
+  const hasLegacyUser=storedUser&&typeof storedUser==="object"&&"password" in storedUser
+  if(!hasLegacyUsers&&!hasLegacyUser) return
+
+  localStorage.setItem("users",JSON.stringify(sanitizeUsers(storedUsers)))
+  localStorage.removeItem("user")
+  localStorage.removeItem("sessionToken")
+  users=sanitizeUsers(storedUsers)
+  currentUser=null
+  sessionToken=null
+  setAuthNotice("Security upgrade applied: legacy password data was removed. Please log in again.")
+}
+
+async function authRequest(url,payload={}){
+  const headers={"Content-Type":"application/json"}
+  if(sessionToken) headers.Authorization=`Bearer ${sessionToken}`
+  const res=await fetch(url,{method:"POST",headers,credentials:"include",body:JSON.stringify(payload)})
+  let data={}
+  try{ data=await res.json() }catch{}
+  if(!res.ok) throw new Error(data.error||data.message||"Authentication request failed")
+  return data
+}
+
+function persistSession(data){
+  const token=data.token||data.sessionToken||null
+  const userData=data.user||data
+  currentUser={
+    email:userData.email,
+    name:userData.name||userData.email?.split('@')[0]||"User"
+  }
+  users[currentUser.email]={name:currentUser.name}
+  if(token){
+    sessionToken=token
+    localStorage.setItem("sessionToken",sessionToken)
+  }else{
+    sessionToken=null
+    localStorage.removeItem("sessionToken")
+  }
+  localStorage.setItem("users",JSON.stringify(users))
+  localStorage.setItem("user",JSON.stringify(currentUser))
+}
+
 // ===== AUTH SYSTEM =====
-function authAction(){
+async function authAction(){
   const fullName=fullNameInput.value.trim()
   const email=emailInput.value.trim()
   const password=passwordInput.value.trim()
   if(!email||!password) return alert("Enter both email and password")
-  if(isLogin){
-    if(users[email]&&users[email].password===password){
-      currentUser={email,password,name:users[email].name||email.split('@')[0]}
-      localStorage.setItem("user",JSON.stringify(currentUser))
+  try{
+    if(isLogin){
+      const data=await authRequest(AUTH_ENDPOINTS.login,{email,password})
+      persistSession(data)
       showApp()
-    } else { alert("Invalid credentials") }
-  } else {
-    if(!fullName){ alert("Enter your full name"); return }
-    if(users[email]) return alert("Email already registered")
-    users[email]={password,name:fullName}
-    localStorage.setItem("users",JSON.stringify(users))
-    currentUser={email,password,name:fullName}
-    localStorage.setItem("user",JSON.stringify(currentUser))
-    showApp()
+    } else {
+      if(!fullName){ alert("Enter your full name"); return }
+      const data=await authRequest(AUTH_ENDPOINTS.signup,{name:fullName,email,password})
+      persistSession(data)
+      showApp()
+    }
+  }catch(err){
+    alert(err.message||"Unable to authenticate")
   }
 }
 function toggleAuth(){
@@ -278,7 +354,9 @@ function showApp(){
 }
 function logout(){
   currentUser=null
+  sessionToken=null
   localStorage.removeItem("user")
+  localStorage.removeItem("sessionToken")
   appSection.classList.add("hidden")
   loginSection.classList.remove("hidden")
 }
@@ -366,24 +444,45 @@ function saveAccountPrivacy(){ privacy[currentUser.email]={private:accPrivate.ch
 function changeEmail(){
   let newEmail=changeEmailInput.value.trim(); if(!newEmail) return alert("Enter a valid email")
   if(users[newEmail]) return alert("Email already exists")
-  users[newEmail]=users[currentUser.email]?users[currentUser.email]:{password:currentUser.password,name:currentUser.name}
-  delete users[currentUser.email]
-  localStorage.setItem("users",JSON.stringify(users))
-  if(privacy[currentUser.email]) privacy[newEmail]=privacy[currentUser.email]
-  if(stories[currentUser.email]) stories[newEmail]=stories[currentUser.email]
-  if(ipTracker[currentUser.email]) ipTracker[newEmail]=ipTracker[currentUser.email]
-  if(risk[currentUser.email]) risk[newEmail]=risk[currentUser.email]
-  delete privacy[currentUser.email]; delete stories[currentUser.email]; delete ipTracker[currentUser.email]; delete risk[currentUser.email]
-  currentUser.email=newEmail
-  localStorage.setItem("user",JSON.stringify(currentUser))
-  localStorage.setItem("privacy",JSON.stringify(privacy))
-  localStorage.setItem("stories",JSON.stringify(stories))
-  localStorage.setItem("ipTracker",JSON.stringify(ipTracker))
-  localStorage.setItem("risk",JSON.stringify(risk))
-  updateUserUI(); loadAccountUI(); alert("Email updated successfully!"); changeEmailInput.value=""
+  authRequest(AUTH_ENDPOINTS.changeEmail,{newEmail}).then(()=>{
+    users[newEmail]=users[currentUser.email]?users[currentUser.email]:{name:currentUser.name}
+    delete users[currentUser.email]
+    localStorage.setItem("users",JSON.stringify(users))
+    if(privacy[currentUser.email]) privacy[newEmail]=privacy[currentUser.email]
+    if(stories[currentUser.email]) stories[newEmail]=stories[currentUser.email]
+    if(ipTracker[currentUser.email]) ipTracker[newEmail]=ipTracker[currentUser.email]
+    if(risk[currentUser.email]) risk[newEmail]=risk[currentUser.email]
+    delete privacy[currentUser.email]; delete stories[currentUser.email]; delete ipTracker[currentUser.email]; delete risk[currentUser.email]
+    currentUser.email=newEmail
+    localStorage.setItem("user",JSON.stringify(currentUser))
+    localStorage.setItem("privacy",JSON.stringify(privacy))
+    localStorage.setItem("stories",JSON.stringify(stories))
+    localStorage.setItem("ipTracker",JSON.stringify(ipTracker))
+    localStorage.setItem("risk",JSON.stringify(risk))
+    updateUserUI(); loadAccountUI(); alert("Email updated successfully!"); changeEmailInput.value=""
+  }).catch(err=>alert(err.message||"Could not update email"))
 }
-function changePassword(){ let newPassword=changePasswordInput.value.trim(); if(!newPassword) return alert("Enter a valid password"); currentUser.password=newPassword; localStorage.setItem("user",JSON.stringify(currentUser)); alert("Password updated!"); changePasswordInput.value="" }
-function deleteAccount(){ if(!confirm("Are you sure?")) return; delete privacy[currentUser.email]; delete stories[currentUser.email]; delete ipTracker[currentUser.email]; delete risk[currentUser.email]; delete users[currentUser.email]; localStorage.removeItem("user"); localStorage.setItem("users",JSON.stringify(users)); currentUser=null; alert("Account deleted!"); location.reload() }
+function changePassword(){
+  let newPassword=changePasswordInput.value.trim()
+  if(!newPassword) return alert("Enter a valid password")
+  authRequest(AUTH_ENDPOINTS.changePassword,{newPassword}).then(()=>{
+    alert("Password updated!")
+    changePasswordInput.value=""
+  }).catch(err=>alert(err.message||"Could not update password"))
+}
+function deleteAccount(){
+  if(!confirm("Are you sure?")) return
+  authRequest(AUTH_ENDPOINTS.deleteAccount,{}).then(()=>{
+    delete privacy[currentUser.email]; delete stories[currentUser.email]; delete ipTracker[currentUser.email]; delete risk[currentUser.email]; delete users[currentUser.email]
+    localStorage.removeItem("user")
+    localStorage.removeItem("sessionToken")
+    localStorage.setItem("users",JSON.stringify(users))
+    currentUser=null
+    sessionToken=null
+    alert("Account deleted!")
+    location.reload()
+  }).catch(err=>alert(err.message||"Could not delete account"))
+}
 function updateUserUI(){ document.getElementById('userName').textContent=currentUser.name; document.getElementById('profileName').textContent=currentUser.name; document.getElementById('profileEmail').textContent=currentUser.email }
 
 // ===== AI SECURITY =====
@@ -430,7 +529,7 @@ function downloadBackup(){
 function restoreBackup(){
   try{
     const data=JSON.parse(restoreInput.value)
-    users=data.users||{}
+    users=sanitizeUsers(data.users||{})
     groups=data.groups||{"General":[]}
     security=data.security||[]
     risk=data.risk||{}
@@ -438,7 +537,8 @@ function restoreBackup(){
     stories=data.stories||{}
     privacy=data.privacy||{}
     reports=data.reports||[]
-    currentUser=data.user||currentUser
+    currentUser=data.user?{email:data.user.email,name:data.user.name||data.user.email?.split('@')[0]}:currentUser
+    sessionToken=data.sessionToken||null
 
     localStorage.setItem("users",JSON.stringify(users))
     localStorage.setItem("groups",JSON.stringify(groups))
@@ -449,6 +549,8 @@ function restoreBackup(){
     localStorage.setItem("privacy",JSON.stringify(privacy))
     localStorage.setItem("reports",JSON.stringify(reports))
     if(currentUser) localStorage.setItem("user",JSON.stringify(currentUser))
+    if(sessionToken) localStorage.setItem("sessionToken",sessionToken)
+    else localStorage.removeItem("sessionToken")
 
     restoreInput.value=""
     alert("Backup restored successfully")
@@ -459,7 +561,16 @@ function restoreBackup(){
 }
 
 // ===== INITIALIZE =====
-if(currentUser) showApp()
+migrateLegacyAuthStorage()
+if(currentUser){
+  authRequest(AUTH_ENDPOINTS.session,{}).then(data=>{
+    persistSession(data)
+    showApp()
+  }).catch(()=>{
+    logout()
+    setAuthNotice("Your session expired. Please log in again.")
+  })
+}
 toggleAuth() // hide full name input initially
 </script>
 
